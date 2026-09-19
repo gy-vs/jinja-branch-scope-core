@@ -258,6 +258,72 @@ def test_if_branching_stores_undefined():
     }
 
 
+def test_if_branch_loads_before_store_in_all_branches():
+    # Every branch stores the name, but the body branch loads it before the
+    # store.  The merged load must still resolve the name from the outer
+    # context so the load before the assignment sees the render parameter.
+    tmpl = nodes.Template(
+        [
+            nodes.If(
+                nodes.Name("expression", "load"),
+                [
+                    nodes.Output([nodes.Name("variable", "load")]),
+                    nodes.Assign(nodes.Name("variable", "store"), nodes.Const(1)),
+                ],
+                [
+                    nodes.If(
+                        nodes.Name("other_expression", "load"),
+                        [
+                            nodes.Assign(
+                                nodes.Name("variable", "store"), nodes.Const(2)
+                            )
+                        ],
+                        [],
+                        [],
+                    )
+                ],
+                [
+                    nodes.Assign(nodes.Name("variable", "store"), nodes.Const(3)),
+                ],
+            )
+        ]
+    )
+
+    sym = symbols_for_node(tmpl)
+    assert sym.stores == {"variable"}
+    assert sym.loads == {
+        "l_0_variable": ("resolve", "variable"),
+        "l_0_expression": ("resolve", "expression"),
+        "l_0_other_expression": ("resolve", "other_expression"),
+    }
+    assert "variable" in sym.loads_before_store
+
+
+def test_if_branch_loads_before_store_aliases_outer():
+    # Same as above, but inside a frame whose parent already stores the name;
+    # the merged load must alias the outer reference.
+    outer = nodes.Template(
+        [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(0))]
+    )
+    outer_sym = symbols_for_node(outer)
+
+    if_node = nodes.If(
+        nodes.Name("expression", "load"),
+        [
+            nodes.Output([nodes.Name("variable", "load")]),
+            nodes.Assign(nodes.Name("variable", "store"), nodes.Const(1)),
+        ],
+        [],
+        [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(2))],
+    )
+    sym = symbols_for_node(if_node, outer_sym)
+    assert sym.stores == {"variable"}
+    assert sym.loads == {
+        "l_1_variable": ("alias", "l_0_variable"),
+        "l_1_expression": ("resolve", "expression"),
+    }
+
+
 def test_if_branching_multi_scope():
     for_loop = nodes.For(
         nodes.Name("item", "store"),

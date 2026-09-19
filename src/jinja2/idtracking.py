@@ -45,6 +45,11 @@ class Symbols:
         self.refs: t.Dict[str, str] = {}
         self.loads: t.Dict[str, t.Any] = {}
         self.stores: t.Set[str] = set()
+        # Names that are loaded before being stored in this frame, for
+        # example a context variable read in an if branch that also stores
+        # a new value later in the same branch.  Such names must keep their
+        # outer value until the assignment happens.
+        self.loads_before_store: t.Set[str] = set()
 
     def analyze_node(self, node: nodes.Node, **kwargs: t.Any) -> None:
         visitor = RootVisitor(self)
@@ -92,6 +97,7 @@ class Symbols:
         rv.refs = self.refs.copy()
         rv.loads = self.loads.copy()
         rv.stores = self.stores.copy()
+        rv.loads_before_store = self.loads_before_store.copy()
         return rv
 
     def store(self, name: str) -> None:
@@ -119,6 +125,10 @@ class Symbols:
     def load(self, name: str) -> None:
         if self.find_ref(name) is None:
             self._define_ref(name, load=(VAR_LOAD_RESOLVE, name))
+            # The name is read before any assignment in this frame, so it
+            # has to be loaded from the outer context even if another branch
+            # assigns it.
+            self.loads_before_store.add(name)
 
     def branch_update(self, branch_symbols: t.Sequence["Symbols"]) -> None:
         stores: t.Dict[str, int] = {}
@@ -132,9 +142,12 @@ class Symbols:
             self.refs.update(sym.refs)
             self.loads.update(sym.loads)
             self.stores.update(sym.stores)
+            self.loads_before_store.update(sym.loads_before_store)
 
         for name, branch_count in stores.items():
-            if branch_count == len(branch_symbols):
+            if branch_count == len(branch_symbols) and (
+                name not in self.loads_before_store
+            ):
                 continue
 
             target = self.find_ref(name)  # type: ignore

@@ -92,6 +92,46 @@ def test_block_set_vars_unpacking_deterministic(tmp_path):
     assert found == expect
 
 
+def test_if_branch_loads_before_store_resolves_context():
+    # All branches store the name and the body reads it before storing. The
+    # local must be initialized from the context (resolve), not to missing.
+    env = Environment()
+    src = (
+        "{% if cond %}{{ a.b }}{% set a = 1 %}"
+        "{% elif other %}{% set a = 2 %}"
+        "{% else %}{% set a = 3 %}{% endif %}"
+    )
+    code = env.compile(src, raw=True)
+    assert re.search(r"^l_0_a = resolve\('a'\)$", code, re.MULTILINE)
+    assert not re.search(r"^l_0_a = missing$", code, re.MULTILINE)
+
+    # Reading after the assignment in the same branch uses the branch value.
+    src = (
+        "{% if cond %}{% set a = 1 %}{{ a }}"
+        "{% elif other %}{% set a = 2 %}{% else %}{% set a = 3 %}{% endif %}"
+    )
+    code = env.compile(src, raw=True)
+    assert re.search(r"^l_0_a = missing$", code, re.MULTILINE)
+
+    # The same applies inside loops and blocks, where the local lives in the
+    # inner frame and must resolve/alias the outer value.
+    src = (
+        "{% for i in seq %}{% if cond %}{{ a }}{% set a = 1 %}"
+        "{% elif other %}{% set a = 2 %}{% else %}{% set a = 3 %}{% endif %}"
+        "{% endfor %}"
+    )
+    code = env.compile(src, raw=True)
+    assert re.search(r"^l_1_a = resolve\('a'\)$", code, re.MULTILINE)
+
+    src = (
+        "{% block b %}{% if cond %}{{ a }}{% set a = 1 %}"
+        "{% elif other %}{% set a = 2 %}{% else %}{% set a = 3 %}{% endif %}"
+        "{% endblock %}"
+    )
+    code = env.compile(src, raw=True)
+    assert re.search(r"^l_0_a = resolve\('a'\)$", code, re.MULTILINE)
+
+
 def test_undefined_import_curly_name():
     env = Environment(
         loader=DictLoader(

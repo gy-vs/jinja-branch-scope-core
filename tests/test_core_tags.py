@@ -337,6 +337,76 @@ class TestIfCondition:
         tmpl = env.from_string("{% if true %}{% set foo = 1 %}{% endif %}{{ foo }}")
         assert tmpl.render() == "1"
 
+    def test_load_before_store_in_branches(self, env):
+        # Reading a name in a branch before assigning it must see the render
+        # parameter, while later reads in that branch see the assigned value.
+        tmpl = env.from_string(
+            "{% if a %}{{ foo.bar }}|{% set foo = 1 %}{{ foo }}"
+            "{% elif b %}{% set foo = 2 %}{{ foo }}"
+            "{% else %}{% set foo = 3 %}{{ foo }}{% endif %}|{{ foo }}"
+        )
+
+        class Obj:
+            bar = "outer"
+
+        assert tmpl.render(a=True, b=False, foo=Obj()) == "outer|1|1"
+        assert tmpl.render(a=False, b=True, foo=Obj()) == "2|2"
+        assert tmpl.render(a=False, b=False, foo=Obj()) == "3|3"
+
+    def test_load_before_store_no_else(self, env):
+        # Without an else branch the name also has to come from the context
+        # when no branch assigns.
+        tmpl = env.from_string(
+            "{% if a %}{{ foo.bar }}|{% set foo = 1 %}"
+            "{% elif b %}{{ foo.bar }}|{% set foo = 2 %}{% endif %}|{{ foo.bar }}"
+        )
+
+        class Obj:
+            bar = "outer"
+
+        assert tmpl.render(a=True, b=False, foo=Obj()) == "outer|1|1"
+        assert tmpl.render(a=False, b=True, foo=Obj()) == "outer|2|2"
+        assert tmpl.render(a=False, b=False, foo=Obj()) == "outer|outer"
+
+    def test_load_before_store_nested_if(self, env):
+        tmpl = env.from_string(
+            "{% if a %}{% if b %}{{ foo.bar }}|{% set foo = 10 %}"
+            "{% else %}{% set foo = 20 %}{% endif %}"
+            "{% elif c %}{% set foo = 30 %}{% else %}{% set foo = 40 %}{% endif %}"
+            "|{{ foo }}"
+        )
+
+        class Obj:
+            bar = "outer"
+
+        assert tmpl.render(a=True, b=True, c=False, foo=Obj()) == "outer|10|10"
+        assert tmpl.render(a=True, b=False, c=False, foo=Obj()) == "20|20"
+        assert tmpl.render(a=False, b=False, c=True, foo=Obj()) == "30|30"
+        assert tmpl.render(a=False, b=False, c=False, foo=Obj()) == "40|40"
+
+    def test_load_before_store_in_loop(self, env):
+        # Loop assignments are loop scoped; the pre-assignment read resolves
+        # from the context on every iteration and does not leak out.
+        tmpl = env.from_string(
+            "{% for i in seq %}{{ foo }}-{% set foo = i %}{{ foo }};"
+            "{% endfor %}|{{ foo }}"
+        )
+        assert tmpl.render(seq=(1, 2), foo="outer") == "outer-1;outer-2;|outer"
+
+    def test_load_before_store_in_block(self, env):
+        tmpl = env.from_string(
+            "{% block x %}{% if a %}{{ foo.bar }}|{% set foo = 1 %}"
+            "{% elif b %}{% set foo = 2 %}{% else %}{% set foo = 3 %}{% endif %}"
+            "|{{ foo }}{% endblock %}"
+        )
+
+        class Obj:
+            bar = "outer"
+
+        assert tmpl.render(a=True, b=False, foo=Obj()) == "outer|1|1"
+        assert tmpl.render(a=False, b=True, foo=Obj()) == "2|2"
+        assert tmpl.render(a=False, b=False, foo=Obj()) == "3|3"
+
 
 class TestMacros:
     def test_simple(self, env_trim):
