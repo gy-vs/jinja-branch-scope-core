@@ -106,3 +106,31 @@ def test_undefined_import_curly_name():
     # that `{bad}` is being interpreted as an f-string. It must be escaped.
     with pytest.raises(UndefinedError):
         env.get_template("{bad}").render()
+
+
+def test_if_all_branches_store_loads_name():
+    # A name that is read before being stored in an `{% if %}` branch
+    # must be loaded from the context when the frame is entered, even
+    # if every branch stores to it. Otherwise the read would see an
+    # uninitialized local instead of the outer value.
+    env = Environment()
+    src = (
+        "{% if x %}{{ a }}{% set a = 1 %}"
+        "{% elif y %}{% set a = 2 %}"
+        "{% else %}{% set a = 3 %}{% endif %}{{ a }}"
+    )
+    code = env.compile(src, raw=True)
+    assert "l_0_a = resolve('a')" in code
+
+
+def test_if_all_branches_store_loads_name_loop():
+    # Same as above, but in a for loop frame, where the local would
+    # otherwise be reset to missing on every iteration.
+    env = Environment()
+    src = (
+        "{% for i in [1] %}{% if x %}{{ a }}{% set a = 1 %}"
+        "{% elif y %}{% set a = 2 %}"
+        "{% else %}{% set a = 3 %}{% endif %}{{ a }}{% endfor %}"
+    )
+    code = env.compile(src, raw=True)
+    assert "l_1_a = resolve('a')" in code

@@ -749,6 +749,94 @@ End"""
         )
         assert tmpl.render() == "foo"
 
+    def test_if_store_all_branches_loads_outer(self, env):
+        # Reading a name before storing to it in an `{% if %}` branch
+        # must see the outer context value, even though every branch
+        # stores to the name.
+        tmpl = env.from_string(
+            "{% if x %}{{ a.b }}{% set a = 1 %}"
+            "{% elif y %}{% set a = 2 %}"
+            "{% else %}{% set a = 3 %}{% endif %}{{ a }}"
+        )
+        out = tmpl.render(x=True, a=type("Item", (), {"b": "value"})())
+        assert out == "value1"
+        assert tmpl.render(y=True) == "2"
+        assert tmpl.render() == "3"
+
+    def test_if_store_some_branches_loads_outer(self, env):
+        # Only some branches store the name, a read before the store
+        # still sees the outer value, and the name falls back to the
+        # outer value when no storing branch executed.
+        tmpl = env.from_string(
+            "{% if x %}{{ a.b }}{% set a = 1 %}{% endif %}{{ a }}"
+        )
+        out = tmpl.render(x=True, a=type("Item", (), {"b": "value"})())
+        assert out == "value1"
+        assert tmpl.render(a="outer") == "outer"
+
+    def test_if_store_nested_loads_outer(self, env):
+        # A nested if stores the name in all of its branches, one of
+        # them reading it first.  The outer if also stores the name in
+        # all of its branches.
+        tmpl = env.from_string(
+            "{% if x %}"
+            "{% if y %}{{ a.b }}{% set a = 1 %}"
+            "{% elif z %}{% set a = 9 %}"
+            "{% else %}{% set a = 2 %}{% endif %}"
+            "{% elif w %}{% set a = 8 %}"
+            "{% else %}{% set a = 3 %}{% endif %}{{ a }}"
+        )
+        out = tmpl.render(x=True, y=True, a=type("Item", (), {"b": "value"})())
+        assert out == "value1"
+        assert tmpl.render(x=True, z=True) == "9"
+        assert tmpl.render(x=True) == "2"
+        assert tmpl.render(w=True) == "8"
+        assert tmpl.render() == "3"
+
+    def test_if_store_loop_loads_outer(self, env):
+        # The same name stored in all branches inside a for loop must
+        # not shadow the outer value before the first store.
+        tmpl = env.from_string(
+            "{% for i in [1, 2] %}"
+            "{% if x %}{{ a.b }}{% set a = i %}"
+            "{% elif y %}{% set a = 9 %}"
+            "{% else %}{% set a = 0 %}{% endif %}"
+            "{{ a }};"
+            "{% endfor %}"
+        )
+        out = tmpl.render(x=True, a=type("Item", (), {"b": "value"})())
+        assert out == "value1;value2;"
+        assert tmpl.render(y=True) == "9;9;"
+        assert tmpl.render() == "0;0;"
+
+    def test_if_store_block_loads_outer(self, env):
+        # A block establishes its own frame, the same rules apply to a
+        # name stored in all branches of an if inside the block.
+        tmpl = env.from_string(
+            "{% block b %}"
+            "{% if x %}{{ a.b }}{% set a = 1 %}"
+            "{% elif y %}{% set a = 9 %}"
+            "{% else %}{% set a = 2 %}{% endif %}"
+            "{{ a }}"
+            "{% endblock %}"
+        )
+        out = tmpl.render(x=True, a=type("Item", (), {"b": "value"})())
+        assert out == "value1"
+        assert tmpl.render(y=True) == "9"
+        assert tmpl.render() == "2"
+
+    def test_if_store_read_after_store(self, env):
+        # A read after the store in the same branch uses the branch's
+        # value, not the outer one.
+        tmpl = env.from_string(
+            "{% if x %}{% set a = 1 %}{{ a }}"
+            "{% elif y %}{% set a = 3 %}"
+            "{% else %}{% set a = 2 %}{% endif %}{{ a }}"
+        )
+        assert tmpl.render(x=True, a="outer") == "11"
+        assert tmpl.render(y=True, a="outer") == "3"
+        assert tmpl.render(a="outer") == "2"
+
 
 @pytest.mark.parametrize("unicode_char", ["\N{FORM FEED}", "\x85"])
 def test_unicode_whitespace(env, unicode_char):

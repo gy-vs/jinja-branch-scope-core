@@ -288,3 +288,211 @@ def test_if_branching_multi_scope():
         "l_1_item": ("param", None),
         "l_1_expression": ("resolve", "expression"),
     }
+
+
+def test_if_branching_load_before_store():
+    # All branches store the name, but the first branch reads it before
+    # storing.  The read must load the name from the outer context, so
+    # the merged load has to be a resolve, not undefined.
+    tmpl = nodes.Template(
+        [
+            nodes.If(
+                nodes.Name("expression", "load"),
+                [
+                    nodes.Output([nodes.Name("variable", "load")]),
+                    nodes.Assign(nodes.Name("variable", "store"), nodes.Const(42)),
+                ],
+                [
+                    nodes.If(
+                        nodes.Name("other", "load"),
+                        [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(23))],
+                        [],
+                        [],
+                    )
+                ],
+                [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(1))],
+            )
+        ]
+    )
+
+    sym = symbols_for_node(tmpl)
+    assert sym.refs == {
+        "variable": "l_0_variable",
+        "expression": "l_0_expression",
+        "other": "l_0_other",
+    }
+    assert sym.stores == {"variable"}
+    assert sym.loads == {
+        "l_0_variable": ("resolve", "variable"),
+        "l_0_expression": ("resolve", "expression"),
+        "l_0_other": ("resolve", "other"),
+    }
+    assert sym.dump_stores() == {
+        "variable": "l_0_variable",
+    }
+
+
+def test_if_branching_elif_load_before_store():
+    # The read before the store happens in an elif branch, all other
+    # branches only store.  The read must still see the outer value.
+    tmpl = nodes.Template(
+        [
+            nodes.If(
+                nodes.Name("expression", "load"),
+                [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(42))],
+                [
+                    nodes.If(
+                        nodes.Name("other", "load"),
+                        [
+                            nodes.Output([nodes.Name("variable", "load")]),
+                            nodes.Assign(
+                                nodes.Name("variable", "store"), nodes.Const(23)
+                            ),
+                        ],
+                        [],
+                        [],
+                    )
+                ],
+                [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(1))],
+            )
+        ]
+    )
+
+    sym = symbols_for_node(tmpl)
+    assert sym.stores == {"variable"}
+    assert sym.loads == {
+        "l_0_variable": ("resolve", "variable"),
+        "l_0_expression": ("resolve", "expression"),
+        "l_0_other": ("resolve", "other"),
+    }
+
+
+def test_if_branching_nested_load_before_store():
+    # A nested if stores the name in all of its branches, one of them
+    # reading it first.  The outer if also stores the name in all of
+    # its branches.  The read must load from the outer context.
+    tmpl = nodes.Template(
+        [
+            nodes.If(
+                nodes.Name("expression", "load"),
+                [
+                    nodes.If(
+                        nodes.Name("inner", "load"),
+                        [
+                            nodes.Output([nodes.Name("variable", "load")]),
+                            nodes.Assign(
+                                nodes.Name("variable", "store"), nodes.Const(42)
+                            ),
+                        ],
+                        [
+                            nodes.If(
+                                nodes.Name("other", "load"),
+                                [
+                                    nodes.Assign(
+                                        nodes.Name("variable", "store"),
+                                        nodes.Const(23),
+                                    )
+                                ],
+                                [],
+                                [],
+                            )
+                        ],
+                        [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(2))],
+                    )
+                ],
+                [
+                    nodes.If(
+                        nodes.Name("outer", "load"),
+                        [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(3))],
+                        [],
+                        [],
+                    )
+                ],
+                [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(1))],
+            )
+        ]
+    )
+
+    sym = symbols_for_node(tmpl)
+    assert sym.stores == {"variable"}
+    assert sym.loads == {
+        "l_0_variable": ("resolve", "variable"),
+        "l_0_expression": ("resolve", "expression"),
+        "l_0_inner": ("resolve", "inner"),
+        "l_0_other": ("resolve", "other"),
+        "l_0_outer": ("resolve", "outer"),
+    }
+
+
+def test_if_branching_all_store_no_load():
+    # All branches store the name and it is never read before being
+    # stored.  The name is still loaded from the outer context when the
+    # frame is entered, so that a read in any position sees a
+    # consistent value regardless of which branch executes.
+    tmpl = nodes.Template(
+        [
+            nodes.If(
+                nodes.Name("expression", "load"),
+                [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(42))],
+                [
+                    nodes.If(
+                        nodes.Name("other", "load"),
+                        [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(23))],
+                        [],
+                        [],
+                    )
+                ],
+                [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(1))],
+            )
+        ]
+    )
+
+    sym = symbols_for_node(tmpl)
+    assert sym.stores == {"variable"}
+    assert sym.loads == {
+        "l_0_variable": ("resolve", "variable"),
+        "l_0_expression": ("resolve", "expression"),
+        "l_0_other": ("resolve", "other"),
+    }
+
+
+def test_if_branching_load_before_store_for():
+    # Same as the top level case, but inside a for loop frame.  The
+    # read before the store must resolve from the outer context rather
+    # than seeing an uninitialized loop-local name.
+    for_loop = nodes.For(
+        nodes.Name("item", "store"),
+        nodes.Name("seq", "load"),
+        [
+            nodes.If(
+                nodes.Name("expression", "load"),
+                [
+                    nodes.Output([nodes.Name("variable", "load")]),
+                    nodes.Assign(nodes.Name("variable", "store"), nodes.Const(42)),
+                ],
+                [
+                    nodes.If(
+                        nodes.Name("other", "load"),
+                        [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(23))],
+                        [],
+                        [],
+                    )
+                ],
+                [nodes.Assign(nodes.Name("variable", "store"), nodes.Const(1))],
+            )
+        ],
+        [],
+        None,
+        False,
+    )
+
+    tmpl = nodes.Template([for_loop])
+    tmpl_sym = symbols_for_node(tmpl)
+    for_sym = symbols_for_node(for_loop, tmpl_sym)
+    assert for_sym.stores == {"item", "variable"}
+    assert for_sym.loads == {
+        "l_1_variable": ("resolve", "variable"),
+        "l_1_expression": ("resolve", "expression"),
+        "l_1_other": ("resolve", "other"),
+        "l_1_item": ("param", None),
+    }
